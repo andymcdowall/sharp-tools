@@ -10,35 +10,35 @@ import (
 
 // Config holds all configuration for Sharp Tools
 type Config struct {
-	Generation GenerationConfig
-	Execution  ExecutionConfig
-	Cache      CacheConfig
-	Model      ModelConfig
+	Generation GenerationConfig `toml:"generation"`
+	Execution  ExecutionConfig  `toml:"execution"`
+	Cache      CacheConfig      `toml:"cache"`
+	Model      ModelConfig      `toml:"model"`
 }
 
 // GenerationConfig holds configuration for tool generation
 type GenerationConfig struct {
-	DefaultLanguage string // "go" | "python" | "typescript"
-	MaxIterations   int    // vX — sidecar manages its own loop in v0
+	DefaultLanguage string `toml:"default_language"` // "go" | "python" | "typescript"
+	MaxIterations   int    `toml:"max_iterations"`   // vX — sidecar manages its own loop in v0
 }
 
 // ExecutionConfig holds configuration for tool execution
 type ExecutionConfig struct {
-	Sandbox       string // "docker" | "none"
-	RequireReview bool
+	Sandbox       string `toml:"sandbox"`        // "docker" | "none"
+	RequireReview bool   `toml:"require_review"`
 }
 
 // CacheConfig holds configuration for cache lookup
 type CacheConfig struct {
-	TagOverlapMinScore         float64
-	SimilarityThresholdAccept  float64 // vX
-	SimilarityThresholdPrompt  float64 // vX
-	AskOnAmbiguousMatch        bool    // vX
+	TagOverlapMinScore        float64 `toml:"tag_overlap_min_score"`         // vX
+	SimilarityThresholdAccept float64 `toml:"similarity_threshold_accept"`  // vX
+	SimilarityThresholdPrompt float64 `toml:"similarity_threshold_prompt"`  // vX
+	AskOnAmbiguousMatch       bool    `toml:"ask_on_ambiguous_match"`       // vX
 }
 
 // ModelConfig holds configuration for LLM models
 type ModelConfig struct {
-	IntentParser string
+	IntentParser string `toml:"intent_parser"`
 }
 
 // DefaultConfig returns a Config with default values
@@ -72,72 +72,25 @@ func Load(configDir string) (*Config, error) {
 	
 	// Check if config file exists
 	_, err := os.Stat(configFile)
-	if os.IsNotExist(err) {
-		// Config file doesn't exist, create defaults and write
-		cfg := DefaultConfig()
-		if err := writeConfigFile(configFile, cfg); err != nil {
-			return nil, fmt.Errorf("failed to write default config: %w", err)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Config file doesn't exist, create defaults and write
+			cfg := DefaultConfig()
+			if err := writeConfigFile(configFile, cfg); err != nil {
+				return nil, fmt.Errorf("failed to write default config: %w", err)
+			}
+			return cfg, nil
 		}
-		return cfg, nil
+		// Other error - return it
+		return nil, fmt.Errorf("failed to stat config file: %w", err)
 	}
 	
-	// Config file exists, read and parse it
-	data, err := os.ReadFile(configFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read config: %w", err)
-	}
-	
-	// Decode into a map first
-	var rawConfig map[string]interface{}
-	_, err = toml.Decode(string(data), &rawConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse config: %w", err)
-	}
-	
-	// Start with defaults
+	// Config file exists, start with defaults
 	cfg := DefaultConfig()
 	
-	// Apply generation config
-	if gen, ok := rawConfig["generation"].(map[string]interface{}); ok {
-		if v, ok := gen["default_language"].(string); ok {
-			cfg.Generation.DefaultLanguage = v
-		}
-		if v, ok := gen["max_iterations"].(int64); ok {
-			cfg.Generation.MaxIterations = int(v)
-		}
-	}
-	
-	// Apply execution config
-	if exec, ok := rawConfig["execution"].(map[string]interface{}); ok {
-		if v, ok := exec["sandbox"].(string); ok {
-			cfg.Execution.Sandbox = v
-		}
-		if v, ok := exec["require_review"].(bool); ok {
-			cfg.Execution.RequireReview = v
-		}
-	}
-	
-	// Apply cache config
-	if cache, ok := rawConfig["cache"].(map[string]interface{}); ok {
-		if v, ok := cache["tag_overlap_min_score"].(float64); ok {
-			cfg.Cache.TagOverlapMinScore = v
-		}
-		if v, ok := cache["similarity_threshold_accept"].(float64); ok {
-			cfg.Cache.SimilarityThresholdAccept = v
-		}
-		if v, ok := cache["similarity_threshold_prompt"].(float64); ok {
-			cfg.Cache.SimilarityThresholdPrompt = v
-		}
-		if v, ok := cache["ask_on_ambiguous_match"].(bool); ok {
-			cfg.Cache.AskOnAmbiguousMatch = v
-		}
-	}
-	
-	// Apply model config
-	if model, ok := rawConfig["model"].(map[string]interface{}); ok {
-		if v, ok := model["intent_parser"].(string); ok {
-			cfg.Model.IntentParser = v
-		}
+	// Decode directly into the struct (toml tags handle the mapping)
+	if _, err := toml.DecodeFile(configFile, cfg); err != nil {
+		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 	
 	// Validate DefaultLanguage

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/BurntSushi/toml"
@@ -143,14 +144,50 @@ func TestConfigFileCreatedOnMiss(t *testing.T) {
 }
 
 func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
+	return strings.Contains(s, substr)
 }
 
-func containsHelper(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
+func TestRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// First load - creates default config
+	cfg1, err := Load(tmpDir)
+	if err != nil {
+		t.Fatalf("first Load() returned error: %v", err)
 	}
-	return false
+
+	// Reload - should read the same values
+	cfg2, err := Load(tmpDir)
+	if err != nil {
+		t.Fatalf("second Load() returned error: %v", err)
+	}
+
+	// Assert values match
+	if cfg1.Generation.DefaultLanguage != cfg2.Generation.DefaultLanguage {
+		t.Errorf("round-trip failed: default_language changed from %q to %q", cfg1.Generation.DefaultLanguage, cfg2.Generation.DefaultLanguage)
+	}
+	if cfg1.Generation.MaxIterations != cfg2.Generation.MaxIterations {
+		t.Errorf("round-trip failed: max_iterations changed from %d to %d", cfg1.Generation.MaxIterations, cfg2.Generation.MaxIterations)
+	}
+	if cfg1.Execution.Sandbox != cfg2.Execution.Sandbox {
+		t.Errorf("round-trip failed: sandbox changed from %q to %q", cfg1.Execution.Sandbox, cfg2.Execution.Sandbox)
+	}
+	if cfg1.Execution.RequireReview != cfg2.Execution.RequireReview {
+		t.Errorf("round-trip failed: require_review changed from %v to %v", cfg1.Execution.RequireReview, cfg2.Execution.RequireReview)
+	}
+	if cfg1.Cache.TagOverlapMinScore != cfg2.Cache.TagOverlapMinScore {
+		t.Errorf("round-trip failed: tag_overlap_min_score changed from %f to %f", cfg1.Cache.TagOverlapMinScore, cfg2.Cache.TagOverlapMinScore)
+	}
+	if cfg1.Cache.SimilarityThresholdAccept != cfg2.Cache.SimilarityThresholdAccept {
+		t.Errorf("round-trip failed: similarity_threshold_accept changed from %f to %f", cfg1.Cache.SimilarityThresholdAccept, cfg2.Cache.SimilarityThresholdAccept)
+	}
+	if cfg1.Cache.SimilarityThresholdPrompt != cfg2.Cache.SimilarityThresholdPrompt {
+		t.Errorf("round-trip failed: similarity_threshold_prompt changed from %f to %f", cfg1.Cache.SimilarityThresholdPrompt, cfg2.Cache.SimilarityThresholdPrompt)
+	}
+	if cfg1.Cache.AskOnAmbiguousMatch != cfg2.Cache.AskOnAmbiguousMatch {
+		t.Errorf("round-trip failed: ask_on_ambiguous_match changed from %v to %v", cfg1.Cache.AskOnAmbiguousMatch, cfg2.Cache.AskOnAmbiguousMatch)
+	}
+	if cfg1.Model.IntentParser != cfg2.Model.IntentParser {
+		t.Errorf("round-trip failed: intent_parser changed from %q to %q", cfg1.Model.IntentParser, cfg2.Model.IntentParser)
+	}
 }

@@ -1,0 +1,57 @@
+name: Test and Coverage
+
+on:
+  push:
+    branches: [ main, feature/*, ticket/* ]
+  pull_request:
+    branches: [ main, feature/* ]
+
+jobs:
+  test:
+    name: Run Tests and Coverage
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+    
+    - name: Download dependencies
+      run: go mod download
+    
+    - name: Run tests with coverage
+      run: go test -v -race -coverprofile=coverage.out ./...
+    
+    - name: Display coverage percentage
+      run: |
+        coverage=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}')
+        echo "Coverage: $coverage"
+    
+    - name: Upload coverage to PR
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage
+        path: coverage.out
+    
+    - name: Post coverage to PR
+      uses: actions/github-script@v7
+      if: github.event_name == 'pull_request'
+      with:
+        script: |
+          const fs = require('fs');
+          const coverage = fs.readFileSync('coverage.out', 'utf8');
+          const lines = coverage.split('\n');
+          const totalLine = lines.find(l => l.includes('total:'));
+          if (totalLine) {
+            const coverage = totalLine.split('\t')[2];
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## Test Coverage\n\n**Coverage: ${coverage}**\n\nSee the artifact for detailed coverage report.`
+            });
+          }
