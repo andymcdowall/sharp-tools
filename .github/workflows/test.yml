@@ -1,0 +1,38 @@
+name: Test and Coverage
+
+on:
+  push:
+    branches: [ main, feature/*, ticket/* ]
+  pull_request:
+    branches: [ main, feature/* ]
+
+jobs:
+  test:
+    name: Run Tests and Coverage
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+    
+    - name: Download dependencies
+      run: go mod download
+    
+    - name: Run tests with coverage
+      run: go test -v -race -coverprofile=coverage.out ./...
+    
+    - name: Display coverage percentage
+      run: |
+        coverage=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}')
+        echo "Coverage: $coverage" >> $GITHUB_STEP_SUMMARY
+    
+    - name: Upload coverage artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage
+        path: coverage.out
