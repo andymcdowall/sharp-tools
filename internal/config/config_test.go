@@ -115,7 +115,7 @@ default_language = "ruby"
 	}
 
 	// Assert error message is clear
-	if !contains(err.Error(), "invalid default_language") {
+	if !strings.Contains(err.Error(), "invalid default_language") {
 		t.Errorf("expected error message to contain 'invalid default_language', got %q", err.Error())
 	}
 }
@@ -141,10 +141,6 @@ func TestConfigFileCreatedOnMiss(t *testing.T) {
 	if err != nil {
 		t.Errorf("created config.toml is not valid TOML: %v", err)
 	}
-}
-
-func contains(s, substr string) bool {
-	return strings.Contains(s, substr)
 }
 
 func TestRoundTrip(t *testing.T) {
