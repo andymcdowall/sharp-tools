@@ -54,7 +54,9 @@ func TestListTools(t *testing.T) {
 	defer db.Close()
 
 	ctx := context.Background()
-	db.RunMigrations(ctx)
+	if err := db.RunMigrations(ctx); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
 
 	tools, err := db.ListTools(ctx)
 	if err != nil {
@@ -64,8 +66,12 @@ func TestListTools(t *testing.T) {
 		t.Errorf("expected 0 tools, got %d", len(tools))
 	}
 
-	db.InsertTool(ctx, "list-tool-a", "Tool A", "Desc", []string{"tag1"})
-	db.InsertTool(ctx, "list-tool-b", "Tool B", "Desc", []string{"tag2"})
+	if _, err := db.InsertTool(ctx, "list-tool-a", "Tool A", "Desc", []string{"tag1"}); err != nil {
+		t.Fatalf("InsertTool failed: %v", err)
+	}
+	if _, err := db.InsertTool(ctx, "list-tool-b", "Tool B", "Desc", []string{"tag2"}); err != nil {
+		t.Fatalf("InsertTool failed: %v", err)
+	}
 
 	tools, err = db.ListTools(ctx)
 	if err != nil {
@@ -84,9 +90,14 @@ func TestInsertIntent(t *testing.T) {
 	defer db.Close()
 
 	ctx := context.Background()
-	db.RunMigrations(ctx)
+	if err := db.RunMigrations(ctx); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
 
-	toolID, _ := db.InsertTool(ctx, "intent-test-tool", "Intent Tool", "Desc", nil)
+	toolID, err := db.InsertTool(ctx, "intent-test-tool", "Intent Tool", "Desc", nil)
+	if err != nil {
+		t.Fatalf("InsertTool failed: %v", err)
+	}
 
 	intentID, err := db.InsertIntent(ctx, toolID, "extra-tag")
 	if err != nil {
@@ -110,9 +121,14 @@ func TestInsertRun(t *testing.T) {
 	defer db.Close()
 
 	ctx := context.Background()
-	db.RunMigrations(ctx)
+	if err := db.RunMigrations(ctx); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
 
-	toolID, _ := db.InsertTool(ctx, "run-test-tool", "Run Tool", "Desc", nil)
+	toolID, err := db.InsertTool(ctx, "run-test-tool", "Run Tool", "Desc", nil)
+	if err != nil {
+		t.Fatalf("InsertTool failed: %v", err)
+	}
 
 	runID, err := db.InsertRun(ctx, toolID, "some input")
 	if err != nil {
@@ -131,7 +147,9 @@ func TestGetMigrationVersions(t *testing.T) {
 	defer db.Close()
 
 	ctx := context.Background()
-	db.RunMigrations(ctx)
+	if err := db.RunMigrations(ctx); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
 
 	versions, err := db.GetMigrationVersions(ctx)
 	if err != nil {
@@ -153,7 +171,9 @@ func TestMarkToolReviewed_NotFound(t *testing.T) {
 	defer db.Close()
 
 	ctx := context.Background()
-	db.RunMigrations(ctx)
+	if err := db.RunMigrations(ctx); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
 
 	err = db.MarkToolReviewed(ctx, 9999, true)
 	if err == nil {
@@ -169,7 +189,9 @@ func TestDeleteTool_NotFound(t *testing.T) {
 	defer db.Close()
 
 	ctx := context.Background()
-	db.RunMigrations(ctx)
+	if err := db.RunMigrations(ctx); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
 
 	err = db.DeleteTool(ctx, 9999)
 	if err == nil {
@@ -185,7 +207,9 @@ func TestInsertTool_DuplicateKey(t *testing.T) {
 	defer db.Close()
 
 	ctx := context.Background()
-	db.RunMigrations(ctx)
+	if err := db.RunMigrations(ctx); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
 
 	_, err = db.InsertTool(ctx, "dup-key", "Tool", "Desc", nil)
 	if err != nil {
@@ -206,7 +230,9 @@ func TestSearchToolsByTags_Empty(t *testing.T) {
 	defer db.Close()
 
 	ctx := context.Background()
-	db.RunMigrations(ctx)
+	if err := db.RunMigrations(ctx); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
 
 	results, err := db.SearchToolsByTags(ctx, nil)
 	if err != nil {

@@ -29,14 +29,19 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
 
-	// Configure connection
-	conn.SetMaxOpenConns(25)
-	conn.SetMaxIdleConns(5)
+	// SQLite only allows one writer at a time; pin to a single connection so
+	// PRAGMA settings remain in effect and concurrent writes don't race.
+	conn.SetMaxOpenConns(1)
 
 	// Verify connection
 	if err := conn.Ping(); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("pinging database: %w", err)
+	}
+
+	if _, err := conn.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("enabling foreign keys: %w", err)
 	}
 
 	db := &DB{conn: conn}
@@ -50,6 +55,11 @@ func OpenMemory() (*DB, error) {
 		return nil, fmt.Errorf("opening in-memory database: %w", err)
 	}
 	conn.SetMaxOpenConns(1)
+
+	if _, err := conn.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("enabling foreign keys: %w", err)
+	}
 
 	db := &DB{conn: conn}
 	return db, nil

@@ -19,7 +19,13 @@ func (db *DB) InsertTool(ctx context.Context, canonicalKey, name, description st
 		return 0, fmt.Errorf("marshaling tags: %w", err)
 	}
 
-	result, err := db.ExecContext(ctx,
+	tx, err := db.BeginTx(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	result, err := tx.ExecContext(ctx,
 		`INSERT INTO tools (canonical_key, name, description, tags, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		canonicalKey, name, description, string(tagsJSON), time.Now(), time.Now(),
@@ -33,17 +39,17 @@ func (db *DB) InsertTool(ctx context.Context, canonicalKey, name, description st
 		return 0, fmt.Errorf("getting last insert ID: %w", err)
 	}
 
-	// Insert intents for each tag
-	if len(tags) > 0 {
-		for _, tag := range tags {
-			_, err := db.ExecContext(ctx,
-				`INSERT INTO intents (tool_id, tag, created_at) VALUES (?, ?, ?)`,
-				toolID, tag, time.Now(),
-			)
-			if err != nil {
-				return 0, fmt.Errorf("inserting intent: %w", err)
-			}
+	for _, tag := range tags {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO intents (tool_id, tag, created_at) VALUES (?, ?, ?)`,
+			toolID, tag, time.Now(),
+		); err != nil {
+			return 0, fmt.Errorf("inserting intent: %w", err)
 		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("committing transaction: %w", err)
 	}
 
 	return toolID, nil
@@ -67,14 +73,12 @@ func (db *DB) GetToolByID(ctx context.Context, id int64) (*Tool, error) {
 		return nil, fmt.Errorf("getting tool by ID: %w", err)
 	}
 
-	// Parse tags from JSON
 	if err := json.Unmarshal([]byte(tagsJSON), &tool.Tags); err != nil {
-		tool.Tags = tagsJSON // Keep original if unmarshal fails
+		return nil, fmt.Errorf("parsing tags: %w", err)
 	}
 
 	return &tool, nil
 }
-
 
 // GetToolByCanonicalKey retrieves a tool by its canonical key
 func (db *DB) GetToolByCanonicalKey(ctx context.Context, canonicalKey string) (*Tool, error) {
@@ -94,9 +98,8 @@ func (db *DB) GetToolByCanonicalKey(ctx context.Context, canonicalKey string) (*
 		return nil, fmt.Errorf("getting tool by canonical key: %w", err)
 	}
 
-	// Parse tags from JSON
 	if err := json.Unmarshal([]byte(tagsJSON), &tool.Tags); err != nil {
-		tool.Tags = tagsJSON // Keep original if unmarshal fails
+		return nil, fmt.Errorf("parsing tags: %w", err)
 	}
 
 	return &tool, nil
@@ -122,9 +125,8 @@ func (db *DB) ListTools(ctx context.Context) ([]Tool, error) {
 			return nil, fmt.Errorf("scanning tool: %w", err)
 		}
 
-		// Parse tags from JSON
 		if err := json.Unmarshal([]byte(tagsJSON), &tool.Tags); err != nil {
-			tool.Tags = tagsJSON
+			return nil, fmt.Errorf("parsing tags: %w", err)
 		}
 
 		tools = append(tools, tool)
@@ -223,9 +225,6 @@ func (db *DB) SearchToolsByTags(ctx context.Context, queryTags []string) ([]Tool
 		}
 	}
 	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 

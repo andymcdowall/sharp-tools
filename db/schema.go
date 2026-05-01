@@ -79,7 +79,6 @@ var migrations = []struct {
 	{
 		Version: "001_initial",
 		SQL: []string{
-			SchemaMigrationsTable,
 			ToolsTable,
 			IntentsTable,
 			RunsTable,

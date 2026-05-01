@@ -41,6 +41,14 @@ func TestIntegration_CascadeDeleteRemovesIntents(t *testing.T) {
 		t.Fatal("expected intents to exist before delete")
 	}
 
+	var preRunCount int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE tool_id = ?`, toolID).Scan(&preRunCount); err != nil {
+		t.Fatalf("counting runs before delete failed: %v", err)
+	}
+	if preRunCount == 0 {
+		t.Fatal("expected run to exist before delete")
+	}
+
 	if err := db.DeleteTool(ctx, toolID); err != nil {
 		t.Fatalf("DeleteTool failed: %v", err)
 	}

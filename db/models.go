@@ -10,7 +10,7 @@ type Tool struct {
 	CanonicalKey   string
 	Name           string
 	Description    string
-	Tags           string // JSON array of tags
+	Tags           []string
 	Reviewed       bool
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
