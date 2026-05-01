@@ -9,107 +9,151 @@ import (
 	"time"
 )
 
-// TagOverlapThreshold is the minimum score (0-1) required for a search result
-const TagOverlapThreshold = 0.3
-
-// InsertTool inserts a new tool and returns its ID
-func (db *DB) InsertTool(ctx context.Context, canonicalKey, name, description string, tags []string) (int64, error) {
-	tagsJSON, err := json.Marshal(tags)
-	if err != nil {
-		return 0, fmt.Errorf("marshaling tags: %w", err)
-	}
-
-	tx, err := db.BeginTx(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("beginning transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	result, err := tx.ExecContext(ctx,
-		`INSERT INTO tools (canonical_key, name, description, tags, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		canonicalKey, name, description, string(tagsJSON), time.Now(), time.Now(),
+// InsertTool inserts a new tool record. The caller must set t.ID before calling.
+func (db *DB) InsertTool(ctx context.Context, t Tool) error {
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO tools (id, name, description, language, created_at, version, reviewed)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		t.ID, t.Name, t.Description, t.Language,
+		t.CreatedAt.UTC().Format(time.RFC3339),
+		t.Version, boolToInt(t.Reviewed),
 	)
 	if err != nil {
-		return 0, fmt.Errorf("inserting tool: %w", err)
+		return fmt.Errorf("inserting tool: %w", err)
 	}
+	return nil
+}
 
-	toolID, err := result.LastInsertId()
+// InsertIntent inserts a new intent record. The caller must set i.ID before calling.
+func (db *DB) InsertIntent(ctx context.Context, i Intent) error {
+	tagsJSON, err := json.Marshal(i.Tags)
 	if err != nil {
-		return 0, fmt.Errorf("getting last insert ID: %w", err)
+		return fmt.Errorf("marshaling tags: %w", err)
+	}
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO intents (id, tool_id, raw_input, canonical_key, tags, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		i.ID, i.ToolID, i.RawInput, i.CanonicalKey,
+		string(tagsJSON),
+		i.CreatedAt.UTC().Format(time.RFC3339),
+	)
+	if err != nil {
+		return fmt.Errorf("inserting intent: %w", err)
+	}
+	return nil
+}
+
+// MarkToolReviewed sets the reviewed flag to true for the given tool.
+func (db *DB) MarkToolReviewed(ctx context.Context, toolID string) error {
+	result, err := db.ExecContext(ctx,
+		`UPDATE tools SET reviewed = 1 WHERE id = ?`,
+		toolID,
+	)
+	if err != nil {
+		return fmt.Errorf("marking tool reviewed: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("tool not found: %s", toolID)
+	}
+	return nil
+}
+
+// GetToolByID retrieves a tool by its string ID.
+func (db *DB) GetToolByID(ctx context.Context, id string) (*Tool, error) {
+	return scanTool(db.QueryRowContext(ctx,
+		`SELECT id, name, description, language, created_at, version, reviewed
+		 FROM tools WHERE id = ?`, id))
+}
+
+// GetToolByCanonicalKey retrieves a tool via its associated intent's canonical key.
+func (db *DB) GetToolByCanonicalKey(ctx context.Context, canonicalKey string) (*Tool, error) {
+	return scanTool(db.QueryRowContext(ctx,
+		`SELECT t.id, t.name, t.description, t.language, t.created_at, t.version, t.reviewed
+		 FROM tools t
+		 JOIN intents i ON i.tool_id = t.id
+		 WHERE i.canonical_key = ?
+		 LIMIT 1`,
+		canonicalKey))
+}
+
+// SearchToolsByTags searches for the highest-scoring tool by FTS5 tag overlap.
+// Score = matching tags / total query tags. Returns nil if no tool meets minScore.
+func (db *DB) SearchToolsByTags(ctx context.Context, tags []string, minScore float64) (*Tool, error) {
+	if len(tags) == 0 {
+		return nil, nil
 	}
 
+	var searchTerms []string
 	for _, tag := range tags {
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO intents (tool_id, tag, created_at) VALUES (?, ?, ?)`,
-			toolID, tag, time.Now(),
-		); err != nil {
-			return 0, fmt.Errorf("inserting intent: %w", err)
+		escaped := strings.ReplaceAll(tag, `"`, `""`)
+		searchTerms = append(searchTerms, fmt.Sprintf(`"%s"`, escaped))
+	}
+	searchQuery := strings.Join(searchTerms, " OR ")
+
+	rows, err := db.QueryContext(ctx,
+		`SELECT i.tool_id, i.tags
+		 FROM intents i
+		 WHERE i.rowid IN (SELECT rowid FROM intents_fts WHERE intents_fts MATCH ?)`,
+		searchQuery,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("searching tools by tags: %w", err)
+	}
+	defer rows.Close()
+
+	querySet := make(map[string]bool, len(tags))
+	for _, t := range tags {
+		querySet[strings.ToLower(t)] = true
+	}
+
+	var bestID string
+	var bestScore float64
+
+	for rows.Next() {
+		var toolID, tagsJSON string
+		if err := rows.Scan(&toolID, &tagsJSON); err != nil {
+			return nil, fmt.Errorf("scanning search result: %w", err)
+		}
+
+		var toolTags []string
+		if err := json.Unmarshal([]byte(tagsJSON), &toolTags); err != nil {
+			continue
+		}
+
+		counted := make(map[string]bool)
+		matched := 0
+		for _, tt := range toolTags {
+			lower := strings.ToLower(tt)
+			if querySet[lower] && !counted[lower] {
+				matched++
+				counted[lower] = true
+			}
+		}
+		score := float64(matched) / float64(len(tags))
+		if score >= minScore && score > bestScore {
+			bestScore = score
+			bestID = toolID
 		}
 	}
-
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("committing transaction: %w", err)
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 
-	return toolID, nil
-}
-
-// GetToolByID retrieves a tool by its ID
-func (db *DB) GetToolByID(ctx context.Context, id int64) (*Tool, error) {
-	var tool Tool
-	var tagsJSON string
-
-	err := db.QueryRowContext(ctx,
-		`SELECT id, canonical_key, name, description, tags, reviewed, created_at, updated_at
-		 FROM tools WHERE id = ?`,
-		id,
-	).Scan(&tool.ID, &tool.CanonicalKey, &tool.Name, &tool.Description, &tagsJSON, &tool.Reviewed, &tool.CreatedAt, &tool.UpdatedAt)
-
-	if err == sql.ErrNoRows {
+	if bestID == "" {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, fmt.Errorf("getting tool by ID: %w", err)
-	}
 
-	if err := json.Unmarshal([]byte(tagsJSON), &tool.Tags); err != nil {
-		return nil, fmt.Errorf("parsing tags: %w", err)
-	}
-
-	return &tool, nil
+	return db.GetToolByID(ctx, bestID)
 }
 
-// GetToolByCanonicalKey retrieves a tool by its canonical key
-func (db *DB) GetToolByCanonicalKey(ctx context.Context, canonicalKey string) (*Tool, error) {
-	var tool Tool
-	var tagsJSON string
-
-	err := db.QueryRowContext(ctx,
-		`SELECT id, canonical_key, name, description, tags, reviewed, created_at, updated_at
-		 FROM tools WHERE canonical_key = ?`,
-		canonicalKey,
-	).Scan(&tool.ID, &tool.CanonicalKey, &tool.Name, &tool.Description, &tagsJSON, &tool.Reviewed, &tool.CreatedAt, &tool.UpdatedAt)
-
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("getting tool by canonical key: %w", err)
-	}
-
-	if err := json.Unmarshal([]byte(tagsJSON), &tool.Tags); err != nil {
-		return nil, fmt.Errorf("parsing tags: %w", err)
-	}
-
-	return &tool, nil
-}
-
-// ListTools retrieves all tools
+// ListTools retrieves all tools ordered by name.
 func (db *DB) ListTools(ctx context.Context) ([]Tool, error) {
 	rows, err := db.QueryContext(ctx,
-		`SELECT id, canonical_key, name, description, tags, reviewed, created_at, updated_at
-		 FROM tools ORDER BY name`,
+		`SELECT id, name, description, language, created_at, version, reviewed FROM tools ORDER BY name`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing tools: %w", err)
@@ -118,134 +162,47 @@ func (db *DB) ListTools(ctx context.Context) ([]Tool, error) {
 
 	var tools []Tool
 	for rows.Next() {
-		var tool Tool
-		var tagsJSON string
-
-		if err := rows.Scan(&tool.ID, &tool.CanonicalKey, &tool.Name, &tool.Description, &tagsJSON, &tool.Reviewed, &tool.CreatedAt, &tool.UpdatedAt); err != nil {
+		t, err := scanToolRow(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scanning tool: %w", err)
 		}
-
-		if err := json.Unmarshal([]byte(tagsJSON), &tool.Tags); err != nil {
-			return nil, fmt.Errorf("parsing tags: %w", err)
-		}
-
-		tools = append(tools, tool)
+		tools = append(tools, *t)
 	}
-
 	return tools, rows.Err()
 }
 
-// MarkToolReviewed updates the reviewed status of a tool
-func (db *DB) MarkToolReviewed(ctx context.Context, toolID int64, reviewed bool) error {
-	result, err := db.ExecContext(ctx,
-		`UPDATE tools SET reviewed = ?, updated_at = ? WHERE id = ?`,
-		reviewed, time.Now(), toolID,
-	)
-	if err != nil {
-		return fmt.Errorf("marking tool reviewed: %w", err)
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("checking rows affected: %w", err)
-	}
-
-	if rowsAffected == 0 {
-		return fmt.Errorf("tool not found: %d", toolID)
-	}
-
-	return nil
-}
-
-// DeleteTool deletes a tool and cascades to related records
-func (db *DB) DeleteTool(ctx context.Context, toolID int64) error {
-	result, err := db.ExecContext(ctx, `DELETE FROM tools WHERE id = ?`, toolID)
+// DeleteTool deletes a tool and cascades to its intents and runs.
+func (db *DB) DeleteTool(ctx context.Context, id string) error {
+	result, err := db.ExecContext(ctx, `DELETE FROM tools WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("deleting tool: %w", err)
 	}
-
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("checking rows affected: %w", err)
 	}
-
 	if rowsAffected == 0 {
-		return fmt.Errorf("tool not found: %d", toolID)
+		return fmt.Errorf("tool not found: %s", id)
 	}
-
 	return nil
 }
 
-// SearchToolsByTags searches for tools using FTS5 tag overlap scoring
-// Score = matching tags / total query tags
-func (db *DB) SearchToolsByTags(ctx context.Context, queryTags []string) ([]ToolSearchResult, error) {
-	if len(queryTags) == 0 {
-		return nil, nil
-	}
-
-	// Escape special FTS5 characters and prepare search terms
-	var searchTerms []string
-	for _, tag := range queryTags {
-		// Escape special characters and wrap in quotes
-		escaped := strings.ReplaceAll(tag, `"`, `""`)
-		searchTerms = append(searchTerms, fmt.Sprintf(`"%s"`, escaped))
-	}
-
-	// Use OR to match any of the tags
-	searchQuery := strings.Join(searchTerms, " OR ")
-
-	// Query FTS for matching tags
-	rows, err := db.QueryContext(ctx,
-		`SELECT i.tool_id, COUNT(DISTINCT i.tag) as matched_tags
-		 FROM intents_fts f
-		 JOIN intents i ON f.rowid = i.id
-		 WHERE intents_fts MATCH ?
-		 GROUP BY i.tool_id`,
-		searchQuery,
+// InsertRun inserts a new run record. The caller must set r.ID before calling.
+func (db *DB) InsertRun(ctx context.Context, r Run) error {
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO runs (id, tool_id, invoked_at, exit_code, duration_ms) VALUES (?, ?, ?, ?, ?)`,
+		r.ID, r.ToolID, r.InvokedAt.UTC().Format(time.RFC3339), r.ExitCode, r.DurationMs,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("searching tools by tags: %w", err)
+		return fmt.Errorf("inserting run: %w", err)
 	}
-
-	type match struct {
-		toolID int64
-		score  float64
-	}
-	var matches []match
-	for rows.Next() {
-		var toolID int64
-		var matchedTags int
-		if err := rows.Scan(&toolID, &matchedTags); err != nil {
-			rows.Close()
-			return nil, fmt.Errorf("scanning search result: %w", err)
-		}
-		score := float64(matchedTags) / float64(len(queryTags))
-		if score >= TagOverlapThreshold {
-			matches = append(matches, match{toolID, score})
-		}
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-
-	var results []ToolSearchResult
-	for _, m := range matches {
-		tool, err := db.GetToolByID(ctx, m.toolID)
-		if err != nil {
-			return nil, fmt.Errorf("getting tool: %w", err)
-		}
-		if tool != nil {
-			results = append(results, ToolSearchResult{Tool: *tool, Score: m.score})
-		}
-	}
-
-	return results, nil
+	return nil
 }
 
-// GetToolIntents retrieves all intents for a given tool ID
-func (db *DB) GetToolIntents(ctx context.Context, toolID int64) ([]Intent, error) {
+// GetToolIntents retrieves all intents for a given tool ID.
+func (db *DB) GetToolIntents(ctx context.Context, toolID string) ([]Intent, error) {
 	rows, err := db.QueryContext(ctx,
-		`SELECT id, tool_id, tag, created_at FROM intents WHERE tool_id = ? ORDER BY id`,
+		`SELECT id, tool_id, raw_input, canonical_key, tags, created_at FROM intents WHERE tool_id = ? ORDER BY id`,
 		toolID,
 	)
 	if err != nil {
@@ -255,47 +212,59 @@ func (db *DB) GetToolIntents(ctx context.Context, toolID int64) ([]Intent, error
 
 	var intents []Intent
 	for rows.Next() {
-		var intent Intent
-		if err := rows.Scan(&intent.ID, &intent.ToolID, &intent.Tag, &intent.CreatedAt); err != nil {
+		var i Intent
+		var tagsJSON, createdAtStr string
+		if err := rows.Scan(&i.ID, &i.ToolID, &i.RawInput, &i.CanonicalKey, &tagsJSON, &createdAtStr); err != nil {
 			return nil, fmt.Errorf("scanning intent: %w", err)
 		}
-		intents = append(intents, intent)
+		if err := json.Unmarshal([]byte(tagsJSON), &i.Tags); err != nil {
+			return nil, fmt.Errorf("parsing tags: %w", err)
+		}
+		if t, err := time.Parse(time.RFC3339, createdAtStr); err == nil {
+			i.CreatedAt = t
+		}
+		intents = append(intents, i)
 	}
 	return intents, rows.Err()
 }
 
-// InsertIntent inserts a new intent/tag for a tool
-func (db *DB) InsertIntent(ctx context.Context, toolID int64, tag string) (int64, error) {
-	result, err := db.ExecContext(ctx,
-		`INSERT INTO intents (tool_id, tag, created_at) VALUES (?, ?, ?)`,
-		toolID, tag, time.Now(),
-	)
-	if err != nil {
-		return 0, fmt.Errorf("inserting intent: %w", err)
+// scanTool scans a single tool row from a *sql.Row query result.
+func scanTool(row *sql.Row) (*Tool, error) {
+	var t Tool
+	var reviewed int
+	var createdAtStr string
+	err := row.Scan(&t.ID, &t.Name, &t.Description, &t.Language, &createdAtStr, &t.Version, &reviewed)
+	if err == sql.ErrNoRows {
+		return nil, nil
 	}
-
-	intentID, err := result.LastInsertId()
 	if err != nil {
-		return 0, fmt.Errorf("getting last insert ID: %w", err)
+		return nil, err
 	}
-
-	return intentID, nil
+	if ts, err := time.Parse(time.RFC3339, createdAtStr); err == nil {
+		t.CreatedAt = ts
+	}
+	t.Reviewed = reviewed != 0
+	return &t, nil
 }
 
-// InsertRun inserts a new run record
-func (db *DB) InsertRun(ctx context.Context, toolID int64, input string) (int64, error) {
-	result, err := db.ExecContext(ctx,
-		`INSERT INTO runs (tool_id, input, status, started_at) VALUES (?, ?, ?, ?)`,
-		toolID, input, "running", time.Now(),
-	)
-	if err != nil {
-		return 0, fmt.Errorf("inserting run: %w", err)
+// scanToolRow scans a tool from a *sql.Rows cursor.
+func scanToolRow(rows *sql.Rows) (*Tool, error) {
+	var t Tool
+	var reviewed int
+	var createdAtStr string
+	if err := rows.Scan(&t.ID, &t.Name, &t.Description, &t.Language, &createdAtStr, &t.Version, &reviewed); err != nil {
+		return nil, err
 	}
-
-	runID, err := result.LastInsertId()
-	if err != nil {
-		return 0, fmt.Errorf("getting last insert ID: %w", err)
+	if ts, err := time.Parse(time.RFC3339, createdAtStr); err == nil {
+		t.CreatedAt = ts
 	}
+	t.Reviewed = reviewed != 0
+	return &t, nil
+}
 
-	return runID, nil
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

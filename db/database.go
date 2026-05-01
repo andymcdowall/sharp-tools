@@ -56,13 +56,17 @@ func OpenMemory() (*DB, error) {
 	}
 	conn.SetMaxOpenConns(1)
 
+	if err := conn.Ping(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("pinging in-memory database: %w", err)
+	}
+
 	if _, err := conn.Exec("PRAGMA foreign_keys = ON"); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("enabling foreign keys: %w", err)
 	}
 
-	db := &DB{conn: conn}
-	return db, nil
+	return &DB{conn: conn}, nil
 }
 
 // Close closes the database connection
@@ -158,8 +162,7 @@ func (db *DB) applyMigration(ctx context.Context, m struct {
 
 	// Execute each SQL statement in the migration
 	for _, sqlStmt := range m.SQL {
-		_, err := tx.ExecContext(ctx, sqlStmt)
-		if err != nil {
+		if _, err = tx.ExecContext(ctx, sqlStmt); err != nil {
 			return fmt.Errorf("executing SQL: %w", err)
 		}
 	}
@@ -207,11 +210,11 @@ func (db *DB) GetMigrationVersions(ctx context.Context) ([]Migration, error) {
 	return migrations, rows.Err()
 }
 
-// DefaultDBPath returns the default database path
-func DefaultDBPath() string {
+// DefaultDBPath returns the default database path.
+func DefaultDBPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "~/.sharp-tools/sharp-tools.db"
+		return "", fmt.Errorf("getting home directory: %w", err)
 	}
-	return filepath.Join(home, ".sharp-tools", "sharp-tools.db")
+	return filepath.Join(home, ".sharp-tools", "sharp-tools.db"), nil
 }
