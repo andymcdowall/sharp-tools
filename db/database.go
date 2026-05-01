@@ -45,10 +45,11 @@ func Open(path string) (*DB, error) {
 
 // OpenMemory creates an in-memory database for testing
 func OpenMemory() (*DB, error) {
-	conn, err := sql.Open("sqlite", "memory:")
+	conn, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		return nil, fmt.Errorf("opening in-memory database: %w", err)
 	}
+	conn.SetMaxOpenConns(1)
 
 	db := &DB{conn: conn}
 	return db, nil

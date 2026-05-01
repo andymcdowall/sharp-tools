@@ -204,41 +204,65 @@ func (db *DB) SearchToolsByTags(ctx context.Context, queryTags []string) ([]Tool
 	if err != nil {
 		return nil, fmt.Errorf("searching tools by tags: %w", err)
 	}
-	defer rows.Close()
 
-	// Calculate scores and filter by threshold
-	var results []ToolSearchResult
+	type match struct {
+		toolID int64
+		score  float64
+	}
+	var matches []match
 	for rows.Next() {
 		var toolID int64
 		var matchedTags int
-
 		if err := rows.Scan(&toolID, &matchedTags); err != nil {
+			rows.Close()
 			return nil, fmt.Errorf("scanning search result: %w", err)
 		}
-
-		// Calculate overlap score
 		score := float64(matchedTags) / float64(len(queryTags))
-
-		// Skip results below threshold
-		if score < TagOverlapThreshold {
-			continue
+		if score >= TagOverlapThreshold {
+			matches = append(matches, match{toolID, score})
 		}
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 
-		// Fetch full tool details
-		tool, err := db.GetToolByID(ctx, toolID)
+	var results []ToolSearchResult
+	for _, m := range matches {
+		tool, err := db.GetToolByID(ctx, m.toolID)
 		if err != nil {
 			return nil, fmt.Errorf("getting tool: %w", err)
 		}
-
 		if tool != nil {
-			results = append(results, ToolSearchResult{
-				Tool:  *tool,
-				Score: score,
-			})
+			results = append(results, ToolSearchResult{Tool: *tool, Score: m.score})
 		}
 	}
 
-	return results, rows.Err()
+	return results, nil
+}
+
+// GetToolIntents retrieves all intents for a given tool ID
+func (db *DB) GetToolIntents(ctx context.Context, toolID int64) ([]Intent, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT id, tool_id, tag, created_at FROM intents WHERE tool_id = ? ORDER BY id`,
+		toolID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("getting tool intents: %w", err)
+	}
+	defer rows.Close()
+
+	var intents []Intent
+	for rows.Next() {
+		var intent Intent
+		if err := rows.Scan(&intent.ID, &intent.ToolID, &intent.Tag, &intent.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scanning intent: %w", err)
+		}
+		intents = append(intents, intent)
+	}
+	return intents, rows.Err()
 }
 
 // InsertIntent inserts a new intent/tag for a tool
